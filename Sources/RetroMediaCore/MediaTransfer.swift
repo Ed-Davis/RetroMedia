@@ -190,10 +190,11 @@ public enum MediaTransfer {
             let tempBase = medium is AkaiMedium ? "RMTEMP\(Int.random(in: 1000...9999))" : "RetroMedia temp \(UUID().uuidString.prefix(8))"
             let tempName = ext.isEmpty ? tempBase : tempBase + "." + ext
             let written = try medium.addFile(named: tempName, size: size, modified: modified, in: folder, source: source)
-            guard let newItem = try medium.list(folder).first(where: { $0.name == written }) else {
-                throw MediaError.io("The new copy of \(name) couldn't be found after writing it.")
-            }
             try medium.delete([old])
+            // Listed again: deleting can move other entries (Akai disks close the gap).
+            guard let newItem = try medium.list(folder).first(where: { $0.name == written }) else {
+                throw MediaError.io("The new copy of \(name) was written as \(written) but couldn't be renamed.")
+            }
             return try medium.rename(newItem, to: name)
         }
         guard medium.freeBytes + medium.bytesNeeded(forFileOfSize: old.size) >= needed else {
