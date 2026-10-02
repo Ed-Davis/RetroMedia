@@ -62,6 +62,10 @@ enum AppArtwork {
         if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png") { return NSImage(contentsOf: url) }
         return NSApp.applicationIconImage
     }
+    static var banner: NSImage? {
+        guard let url = Bundle.main.url(forResource: "Banner", withExtension: "png") else { return nil }
+        return NSImage(contentsOf: url)
+    }
 }
 
 struct AboutView: View {
@@ -69,7 +73,11 @@ struct AboutView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            if let icon = AppArtwork.icon {
+            if let banner = AppArtwork.banner {
+                Image(nsImage: banner).resizable().aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.bottom, 6)
+            } else if let icon = AppArtwork.icon {
                 Image(nsImage: icon).resizable().frame(width: 128, height: 128)
             }
             Text("RetroMedia").font(.title2.bold())
@@ -84,7 +92,7 @@ struct AboutView: View {
                 .padding(.top, 8)
         }
         .padding(28)
-        .frame(width: 380)
+        .frame(width: 420)
     }
 }
 

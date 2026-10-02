@@ -1,6 +1,6 @@
 # RetroMedia
 
-![RetroMedia](Packaging/AppIcon.png)
+![RetroMedia](Packaging/Banner.png)
 
 Copy files on and off the disk images that floppy and hard disk emulators use, on a Mac. By Ed Davis.
 

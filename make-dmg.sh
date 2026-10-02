@@ -18,6 +18,7 @@ BIN_DIR="$(swift build -c release --show-bin-path)"
 rm -rf build && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/$EXEC" "$APP/Contents/MacOS/$EXEC"
 cp Sources/RetroMedia/Resources/AppIcon.png "$APP/Contents/Resources/AppIcon.png"
+cp Sources/RetroMedia/Resources/Banner.png "$APP/Contents/Resources/Banner.png"
 
 echo "▸ Making the icon…"
 ICONSET="$(mktemp -d)/AppIcon.iconset"
