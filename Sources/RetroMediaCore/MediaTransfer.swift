@@ -115,6 +115,17 @@ public enum MediaTransfer {
                                   progress: TransferProgress?, isCancelled: () -> Bool) {
         let name = url.lastPathComponent
         guard !isMacJunk(name) else { return }
+        var url = url
+        if (try? FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeSymbolicLink {
+            // Follow links to files; links to folders could loop forever.
+            let resolved = url.resolvingSymlinksInPath()
+            var linkDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: resolved.path, isDirectory: &linkDir), linkDir.boolValue {
+                report.skipped.append("\(name) (a link to a folder)")
+                return
+            }
+            url = resolved
+        }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
             report.failed.append("\(name): it's no longer there")
@@ -133,28 +144,63 @@ public enum MediaTransfer {
                 }
                 return
             }
-            guard let finalName = try resolveFileName(name, in: folder, on: medium, conflict: conflict, report: &report) else { return }
             // Straight from the file system: URL resource values are cached and
             // go stale if the file changes while the app is running.
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
             let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
             let modified = attributes[.modificationDate] as? Date
+            // Everything that could stop the copy is checked before anything
+            // already on the disk is touched.
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
+            if medium is AkaiMedium, AkaiMedium.rawType(forExtension: (name as NSString).pathExtension) == nil {
+                throw MediaError.unsupported("Only Akai files (.s1, .s3, .p1, .p3…) can go on an Akai disk.")
+            }
+            guard let plan = try resolveFileName(name, in: folder, on: medium, conflict: conflict, report: &report) else { return }
             let start = done
             progress?(done, total, name)
-            let stored = try medium.addFile(named: finalName, size: size, modified: modified ?? Date(),
-                                            in: folder) { offset, count in
+            let source: (Int64, Int) throws -> [UInt8] = { offset, count in
                 try handle.seek(toOffset: UInt64(offset))
                 let data = try handle.read(upToCount: count) ?? Data()
                 progress?(start + offset + Int64(count), total, name)
                 return [UInt8](data)
+            }
+            let stored: String
+            if let old = plan.replacing {
+                stored = try replace(old, with: plan.name, size: size, modified: modified ?? Date(), in: folder, on: medium, source: source)
+            } else {
+                stored = try medium.addFile(named: plan.name, size: size, modified: modified ?? Date(), in: folder, source: source)
             }
             done = start + size
             report.copied.append(stored)
         } catch {
             report.failed.append("\(name): \(error.localizedDescription)")
         }
+    }
+
+    /// Replaces a file without risking it: when there's room, the new file is
+    /// written under a temporary name first, then the old one is deleted and
+    /// the new one renamed. Otherwise the old one is deleted first, but only
+    /// once the new one is sure to fit.
+    private static func replace(_ old: MediaItem, with name: String, size: Int64, modified: Date, in folder: FolderRef,
+                                on medium: Medium, source: (Int64, Int) throws -> [UInt8]) throws -> String {
+        let needed = medium.bytesNeeded(forFileOfSize: size)
+        if medium.freeBytes >= needed + medium.bytesNeeded(forFileOfSize: 0) * 2 {
+            let ext = (name as NSString).pathExtension
+            let tempBase = medium is AkaiMedium ? "RMTEMP\(Int.random(in: 1000...9999))" : "RetroMedia temp \(UUID().uuidString.prefix(8))"
+            let tempName = ext.isEmpty ? tempBase : tempBase + "." + ext
+            let written = try medium.addFile(named: tempName, size: size, modified: modified, in: folder, source: source)
+            guard let newItem = try medium.list(folder).first(where: { $0.name == written }) else {
+                throw MediaError.io("The new copy of \(name) couldn't be found after writing it.")
+            }
+            try medium.delete([old])
+            return try medium.rename(newItem, to: name)
+        }
+        guard medium.freeBytes + medium.bytesNeeded(forFileOfSize: old.size) >= needed else {
+            throw MediaError.diskFull(needed: needed, free: medium.freeBytes + medium.bytesNeeded(forFileOfSize: old.size))
+        }
+        try medium.delete([old])
+        return try medium.addFile(named: name, size: size, modified: modified, in: folder, source: source)
     }
 
     /// Where a folder's contents go: a new folder, an existing one of the same
@@ -170,27 +216,29 @@ public enum MediaTransfer {
                 return f   // replace: merge into the folder that's there
             }
             if conflict == .skip { report.skipped.append(name); return nil }
-            if conflict == .replace { try medium.delete([same]) }
-            else { return try medium.makeFolder(named: uniqueName(name, taken: Set(existing.map { $0.name.uppercased() })), in: folder) }
+            // A file of the same name is never deleted to make way for a
+            // folder: the folder gets a numbered name instead.
+            return try medium.makeFolder(named: uniqueName(name, taken: Set(existing.map { $0.name.uppercased() })), in: folder)
         }
         return try medium.makeFolder(named: name, in: folder)
     }
 
-    /// The name a file goes in under, after any conflict: the same name (the
-    /// old file removed if replacing), a numbered one, or nil to skip.
+    /// The name a file goes in under after any conflict, and the file it
+    /// replaces (if any); nil to skip.
     private static func resolveFileName(_ name: String, in folder: FolderRef, on medium: Medium,
-                                        conflict: ConflictChoice, report: inout TransferReport) throws -> String? {
+                                        conflict: ConflictChoice, report: inout TransferReport) throws -> (name: String, replacing: MediaItem?)? {
         let existing = try medium.list(folder)
         guard let same = existing.first(where: { Self.same($0, name, on: medium) }) else {
-            return name
+            return (name, nil)
         }
-        switch conflict {
+        // A folder is never replaced by a file: the file gets a numbered name.
+        let choice: ConflictChoice = same.isDirectory && conflict == .replace ? .keepBoth : conflict
+        switch choice {
         case .skip:
             report.skipped.append(name)
             return nil
         case .replace:
-            try medium.delete([same])
-            return name
+            return (name, same)
         case .keepBoth:
             if medium is AkaiMedium {
                 let ext = (name as NSString).pathExtension
@@ -198,10 +246,10 @@ public enum MediaTransfer {
                 let taken = Set(existing.map { ($0.name as NSString).deletingPathExtension.uppercased() })
                 for n in 2...999 {
                     let candidate = AkaiCharset.clean(String(AkaiCharset.clean(base).prefix(12 - " \(n)".count)) + " \(n)")
-                    if !taken.contains(candidate) { return candidate + "." + ext }
+                    if !taken.contains(candidate) { return (candidate + "." + ext, nil) }
                 }
             }
-            return uniqueName(name, taken: Set(existing.flatMap { [$0.name.uppercased(), ($0.shortName ?? "").uppercased()] }))
+            return (uniqueName(name, taken: Set(existing.flatMap { [$0.name.uppercased(), ($0.shortName ?? "").uppercased()] })), nil)
         }
     }
 
@@ -243,7 +291,9 @@ public enum MediaTransfer {
             if item.isDirectory && isDir.boolValue && conflict == .replace {
                 // merge into it
             } else {
-                switch conflict {
+                // Never delete a folder to make way for a file, or the reverse.
+                let choice: ConflictChoice = (item.isDirectory != isDir.boolValue && conflict == .replace) ? .keepBoth : conflict
+                switch choice {
                 case .skip:
                     report.skipped.append(item.name)
                     return

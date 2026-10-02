@@ -72,6 +72,18 @@ final class MediaTests: XCTestCase {
         XCTAssertEqual(reopened.entries.last?.type, 0x73)
         XCTAssertEqual(reopened.entries.last?.size, Int(items[0].size) - 42)
 
+        // Replacing an Akai file goes through a temporary name and keeps the 12-character name.
+        let again = MediaTransfer.copy([onDOS], from: dos, to: s1000, folder: .root, conflict: .replace)
+        XCTAssertEqual(again.copied, ["SINE 440.s1"], "\(again)")
+        XCTAssertEqual(try AkaiDisk(contentsOf: s1000.url).entries.filter { $0.name.hasPrefix("SINE 440") }.count, 2)
+
+        // A non-Akai file never replaces the Akai one of the same name.
+        let wav = folder.appendingPathComponent("SINE 440.wav")
+        try Data(count: 100).write(to: wav)
+        let refusedWAV = MediaTransfer.importURLs([wav], to: s1000, folder: .root, conflict: .replace)
+        XCTAssertEqual(refusedWAV.failed.count, 1)
+        XCTAssertTrue(try AkaiDisk(contentsOf: s1000.url).entries.contains { $0.name == "SINE 440" })
+
         // Other files can't go on an Akai disk.
         let txt = folder.appendingPathComponent("readme.txt")
         try Data("x".utf8).write(to: txt)
@@ -136,6 +148,14 @@ final class MediaTests: XCTestCase {
         XCTAssertEqual(MediaTransfer.importURLs([file], to: floppy, folder: into, conflict: .replace).copied, ["notes.txt"])
         let replaced = try XCTUnwrap(try floppy.list(into).first { $0.name == "notes.txt" })
         XCTAssertEqual(try floppy.read(replaced), Data("changed".utf8))
+
+        // A file never replaces a folder of the same name.
+        let clash = folder.appendingPathComponent("Sub folder")
+        try? FileManager.default.removeItem(at: clash)
+        try Data("file".utf8).write(to: clash)
+        let notFolder = MediaTransfer.importURLs([clash], to: floppy, folder: into, conflict: .replace)
+        XCTAssertEqual(notFolder.copied, ["Sub folder 2"])
+        XCTAssertTrue(try floppy.list(into).contains { $0.name == "Sub folder" && $0.isDirectory })
 
         // Out to the Mac again, folders and all.
         let out = folder.appendingPathComponent("out")

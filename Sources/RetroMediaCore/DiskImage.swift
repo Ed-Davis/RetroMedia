@@ -237,7 +237,14 @@ public enum DiskImageMaker {
         let tmp1 = total - (Int64(reserved) + rootSectors)
         var tmp2 = Int64(256 * spc + 2)
         if entryBytes == 4 { tmp2 /= 2 }
-        return Int((tmp1 + tmp2 - 1) / tmp2)
+        var fat = Int((tmp1 + tmp2 - 1) / tmp2)
+        // The formula ignores the two reserved entries and can round a sector
+        // short; grow the table until every cluster has an entry.
+        while true {
+            let clusters = (Int(tmp1) - 2 * fat) / spc
+            if (clusters + 2) * entryBytes <= fat * sectorSize { return fat }
+            fat += 1
+        }
     }
 
     /// Writes a new hard disk image of `totalMB` to `url` (replacing any file there).

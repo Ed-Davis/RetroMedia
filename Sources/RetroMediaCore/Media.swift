@@ -268,7 +268,8 @@ public final class AkaiMedium: Medium, @unchecked Sendable {
         guard !isReadOnly else { throw MediaError.readOnly }
         guard case .akai(let e) = item.ref else { return item.name }
         var updated = disk
-        let base = (name as NSString).pathExtension == Self.rawExtension(e.type) ? (name as NSString).deletingPathExtension : name
+        // "KICK.s3" → KICK: any Akai extension is the type, not part of the name.
+        let base = Self.rawType(forExtension: (name as NSString).pathExtension) != nil ? (name as NSString).deletingPathExtension : name
         try updated.rename(e, to: base)
         try save(updated)
         return Self.exportName(updated.entries[e.index])

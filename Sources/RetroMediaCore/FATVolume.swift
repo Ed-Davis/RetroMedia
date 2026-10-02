@@ -116,7 +116,13 @@ public final class FATVolume: @unchecked Sendable {
               offset + UInt64(total) * UInt64(bps) <= image.size + UInt64(bps) * 64 else {
             throw MediaError.notRecognised("No FAT filesystem here.")
         }
-        clusterCount = dataSectors / spc
+        // Never more clusters than the table has entries for (some formatters
+        // round the table down) or than the image file actually holds.
+        let bitsPerEntry = isFAT32Layout ? 32 : (dataSectors / spc < 4085 ? 12 : 16)
+        let tableEntries = fatSize * bps * 8 / bitsPerEntry - 2
+        let firstData = Int(offset) / bps + reserved + fats * fatSize + rootSectors
+        let inFile = max(0, (Int(image.size) / bps - firstData) / spc)
+        clusterCount = min(dataSectors / spc, tableEntries, inFile)
         if isFAT32Layout {
             kind = .fat32
             rootCluster = UInt32(le32(b, 44))
@@ -154,7 +160,7 @@ public final class FATVolume: @unchecked Sendable {
         for slot in 0..<(bytes.count / 32) {
             let e = Array(bytes[slot * 32..<slot * 32 + 32])
             if e[0] == 0 { break }
-            if e[0] != 0xE5 && e[11] != 0x0F && e[11] & 0x08 != 0 {
+            if e[0] != 0xE5 && e[11] & 0x3F != 0x0F && e[11] & 0x08 != 0 {
                 return String(decoding: e[0..<11], as: UTF8.self).trimmingCharacters(in: .whitespaces)
             }
         }
@@ -183,7 +189,7 @@ public final class FATVolume: @unchecked Sendable {
             let e = Array(bytes[slot * 32..<slot * 32 + 32])
             if e[0] == 0 { break }
             if e[0] == 0xE5 { longParts = [:]; longSlots = []; longChecksum = nil; continue }
-            if e[11] == 0x0F {
+            if e[11] & 0x3F == 0x0F {
                 if e[0] & 0x40 != 0 { longParts = [:]; longSlots = [] }
                 longParts[Int(e[0] & 0x1F)] = Self.longNamePart(e)
                 longSlots.append(slot)
@@ -257,12 +263,13 @@ public final class FATVolume: @unchecked Sendable {
                            progress: ((Double) -> Void)? = nil,
                            source: (_ offset: Int64, _ count: Int) throws -> [UInt8]) throws -> FATEntry {
         guard isWritable else { throw MediaError.readOnly }
-        guard size < Int64(UInt32.max) else {
+        guard size <= Int64(UInt32.max) else {
             throw MediaError.unsupported("\(name) is 4 GB or more, which FAT can't hold.")
         }
         let entries = try nameEntries(for: name, in: dir)
         let count = Int((size + Int64(clusterBytes) - 1) / Int64(clusterBytes))
         let clusters = count == 0 ? [] : try allocate(count: count)
+        let slot: Int
         do {
             // 1. Data.
             for (i, cluster) in clusters.enumerated() {
@@ -278,14 +285,15 @@ public final class FATVolume: @unchecked Sendable {
             // 3. The directory entries that make it visible.
             let short = makeEntry(entries.short, flags: entries.flags, attributes: 0x20,
                                   cluster: clusters.first ?? 0, size: UInt32(size), date: modified)
-            let slot = try addEntries(entries.long + [short], to: dir)
+            slot = try addEntries(entries.long + [short], to: dir)
             image.flush()
-            return try entryAt(slot: slot, in: dir)
         } catch {
             free(clusters)
             try? writeFAT()
             throw error
         }
+        // The file is written; reading it back can't undo that.
+        return try entryAt(slot: slot, in: dir)
     }
 
     @discardableResult
@@ -293,6 +301,7 @@ public final class FATVolume: @unchecked Sendable {
         guard isWritable else { throw MediaError.readOnly }
         let entries = try nameEntries(for: name, in: dir)
         let cluster = try allocate(count: 1)[0]
+        let slot: Int
         do {
             var block = [UInt8](repeating: 0, count: clusterBytes)
             var parentCluster: UInt32 = 0
@@ -302,14 +311,14 @@ public final class FATVolume: @unchecked Sendable {
             try image.write(block, at: clusterOffset(cluster))
             try writeFAT()
             let short = makeEntry(entries.short, flags: entries.flags, attributes: 0x10, cluster: cluster, size: 0, date: modified)
-            let slot = try addEntries(entries.long + [short], to: dir)
+            slot = try addEntries(entries.long + [short], to: dir)
             image.flush()
-            return try entryAt(slot: slot, in: dir)
         } catch {
             free([cluster])
             try? writeFAT()
             throw error
         }
+        return try entryAt(slot: slot, in: dir)
     }
 
     /// Deletes a file, or a folder and everything in it.
@@ -376,20 +385,27 @@ public final class FATVolume: @unchecked Sendable {
     /// Sets the volume label (up to 11 characters, as DOS shows it).
     public func setLabel(_ raw: String) throws {
         guard isWritable else { throw MediaError.readOnly }
-        let text = String(raw.uppercased().unicodeScalars.filter { $0.isASCII && $0.value >= 32 && !"*?/\\|,;:+=<>[]\"".unicodeScalars.contains($0) }.map(Character.init))
+        let text = String(raw.uppercased().unicodeScalars.filter { $0.isASCII && $0.value >= 32 && $0.value < 127 && !"*?/\\|,;:+=<>[]\".".unicodeScalars.contains($0) }.map(Character.init))
         let label = String(text.prefix(11))
         let padded = Array(label.padding(toLength: 11, withPad: " ", startingAt: 0).utf8)
         // Boot sector copy.
         let at = UInt64(kind == .fat32 ? 71 : 43)
+        let bootLabel = label.isEmpty ? Array("NO NAME    ".utf8) : padded
         let b = try image.read(at: offset, count: 512)
-        if b[kind == .fat32 ? 66 : 38] == 0x29 { try image.write(padded, at: offset + at) }
+        if b[kind == .fat32 ? 66 : 38] == 0x29 {
+            try image.write(bootLabel, at: offset + at)
+            let backup = le16(b, 50)
+            if kind == .fat32, backup > 0, backup < reservedSectors {
+                try image.write(bootLabel, at: offset + UInt64(backup * bytesPerSector) + at)
+            }
+        }
         // Directory copy: replace an existing label entry, or add one.
         let bytes = try directoryBytes(.root)
         var done = false
         for slot in 0..<(bytes.count / 32) {
             let e = Array(bytes[slot * 32..<slot * 32 + 32])
             if e[0] == 0 { break }
-            if e[0] != 0xE5 && e[11] != 0x0F && e[11] & 0x08 != 0 {
+            if e[0] != 0xE5 && e[11] & 0x3F != 0x0F && e[11] & 0x08 != 0 {
                 if label.isEmpty {
                     try image.write([0xE5], at: try slotOffset(slot, in: .root))
                 } else {
@@ -491,7 +507,8 @@ public final class FATVolume: @unchecked Sendable {
             let at = offset + UInt64(fsInfoSector * bytesPerSector)
             let info = try image.read(at: at, count: 512)
             if le32(info, 0) == 0x4161_5252 && le32(info, 484) == 0x6141_7272 {
-                try image.write(bytes32(freeCount) + bytes32(nextFreeHint), at: at + 488)
+                let next = nextFreeHint >= 2 && nextFreeHint < fat.count ? nextFreeHint : 0xFFFF_FFFF
+                try image.write(bytes32(freeCount) + bytes32(next), at: at + 488)
             }
         }
     }
@@ -592,6 +609,12 @@ public final class FATVolume: @unchecked Sendable {
                         let start = slot - needed + 1
                         for (i, e) in entries.enumerated() {
                             try image.write(e, at: try slotOffset(start + i, in: dir))
+                        }
+                        // Past the old end of the directory, make sure whatever
+                        // follows still reads as the end (old formatters can leave
+                        // stale bytes there).
+                        if ended, slot + 1 < total, bytes[(slot + 1) * 32] != 0 {
+                            try image.write([0], at: try slotOffset(slot + 1, in: dir))
                         }
                         return slot
                     }
@@ -740,7 +763,8 @@ public enum FATNames {
         var flags: UInt8 = 0
         for (i, part) in parts.enumerated() {
             let s = String(part)
-            guard s.uppercased().allSatisfy({ shortNameCharacters.contains($0) }) else { return nil }
+            // ASCII only: some letters uppercase to ASCII (ß → SS) and would change.
+            guard s.allSatisfy(\.isASCII), s.uppercased().allSatisfy({ shortNameCharacters.contains($0) }) else { return nil }
             let hasLower = s != s.uppercased(), hasUpper = s != s.lowercased()
             if hasLower && hasUpper { return nil }
             if hasLower { flags |= i == 0 ? 0x08 : 0x10 }
