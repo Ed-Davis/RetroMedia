@@ -7,7 +7,7 @@ public final class FATDiskImage: @unchecked Sendable {
     public let file: ImageFile
     public let volumes: [FATVolume]
 
-    public init(url: URL, writable: Bool = true) throws {
+    public convenience init(url: URL, writable: Bool = true) throws {
         let file = try ImageFile(url: url, writable: writable)
         try self.init(file: file)
     }
