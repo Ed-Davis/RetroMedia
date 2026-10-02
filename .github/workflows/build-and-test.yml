@@ -1,0 +1,51 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0   # build number comes from the commit count
+
+    - name: Build
+      run: |
+        set -o pipefail
+        swift build 2>&1 | tee build.log
+
+    - name: Report build errors
+      if: failure()
+      run: |
+        grep -E "error:" build.log | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+
+    - name: Run tests
+      run: |
+        set -o pipefail
+        swift test 2>&1 | tee test.log
+
+    - name: Report test failures
+      if: failure()
+      run: |
+        grep -E "error:|failed|Fatal|crash" test.log | grep -v "^Test Suite" | head -40 | while IFS= read -r line; do
+          echo "::error::${line}"
+        done
+
+    - name: Build test DMG
+      run: ./make-dmg.sh
+
+    - name: Upload test DMG
+      uses: actions/upload-artifact@v4
+      with:
+        name: RetroMedia-test-dmg
+        path: 'build/*.dmg'
+        if-no-files-found: error
+        retention-days: 14
