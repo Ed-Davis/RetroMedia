@@ -236,8 +236,8 @@ extension Workspace {
     /// Handles a drop onto a medium: items from another medium are copied
     /// across; files from Finder are copied in.
     func handleDrop(_ providers: [NSItemProvider], onto om: OpenMedium, folder: FolderRef? = nil) -> Bool {
-        if let internal = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.retroMediaItems.identifier) }) {
-            internal.loadDataRepresentation(forTypeIdentifier: UTType.retroMediaItems.identifier) { data, _ in
+        if let own = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.retroMediaItems.identifier) }) {
+            own.loadDataRepresentation(forTypeIdentifier: UTType.retroMediaItems.identifier) { data, _ in
                 guard let data, let dragged = try? JSONDecoder().decode(DraggedItems.self, from: data) else { return }
                 Task { @MainActor in
                     guard let source = self.medium(dragged.medium) else { return }
