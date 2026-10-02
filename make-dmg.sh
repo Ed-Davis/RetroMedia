@@ -46,6 +46,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key>    <true/>
     <key>NSPrincipalClass</key>           <string>NSApplication</string>
     <key>NSHumanReadableCopyright</key>   <string>© 2026 Ed Davis</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>        <string>com.ed1t.retromedia.items</string>
+            <key>UTTypeDescription</key>       <string>RetroMedia items</string>
+            <key>UTTypeConformsTo</key>        <array><string>public.data</string></array>
+        </dict>
+    </array>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>

@@ -352,7 +352,7 @@ public enum MediaOpener {
     /// Akai floppy, or a CD image.
     public static func open(_ url: URL) throws -> [Medium] {
         let ext = url.pathExtension.lowercased()
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let size = Int(MediaTransfer.fileSize(url))
         if ext == "iso", let iso = try? ISOMedium(url: url) { return [iso] }
         if size == AkaiDisk.imageSize, let akai = try? AkaiMedium(url: url) { return [akai] }
         do {

@@ -66,8 +66,7 @@ public enum MediaTransfer {
                 let children = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
                 total += bytesNeeded(children.filter { !isMacJunk($0.lastPathComponent) }, on: medium)
             } else {
-                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-                total += medium.bytesNeeded(forFileOfSize: size)
+                total += medium.bytesNeeded(forFileOfSize: fileSize(url))
             }
         }
         return total
@@ -99,10 +98,14 @@ public enum MediaTransfer {
         return report
     }
 
+    static func fileSize(_ url: URL) -> Int64 {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
     private static func macSize(_ url: URL) -> Int64 {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
-        if !isDir.boolValue { return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0 }
+        if !isDir.boolValue { return fileSize(url) }
         let children = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
         return children.reduce(0) { $0 + macSize($1) }
     }
@@ -131,13 +134,16 @@ public enum MediaTransfer {
                 return
             }
             guard let finalName = try resolveFileName(name, in: folder, on: medium, conflict: conflict, report: &report) else { return }
-            let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            let size = Int64(values.fileSize ?? 0)
+            // Straight from the file system: URL resource values are cached and
+            // go stale if the file changes while the app is running.
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            let modified = attributes[.modificationDate] as? Date
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
             let start = done
             progress?(done, total, name)
-            let stored = try medium.addFile(named: finalName, size: size, modified: values.contentModificationDate ?? Date(),
+            let stored = try medium.addFile(named: finalName, size: size, modified: modified ?? Date(),
                                             in: folder) { offset, count in
                 try handle.seek(toOffset: UInt64(offset))
                 let data = try handle.read(upToCount: count) ?? Data()
