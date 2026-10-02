@@ -344,11 +344,23 @@ public final class FATVolume: @unchecked Sendable {
         var short = old
         short.replaceSubrange(0..<11, with: entries.short)
         short[12] = entries.flags
-        // Old name off first, then the new one on (it may need different slots).
-        for slot in entry.slots { try image.write([0xE5], at: try slotOffset(slot, in: entry.parent)) }
-        let slot = try addEntries(entries.long + [short], to: entry.parent)
-        image.flush()
-        return try entryAt(slot: slot, in: entry.parent)
+        // Old name off first, then the new one on (it may need different
+        // slots). If the new name can't be written, the old one goes back.
+        var saved: [(Int, [UInt8])] = []
+        for slot in entry.slots {
+            let at = try slotOffset(slot, in: entry.parent)
+            saved.append((slot, try image.read(at: at, count: 32)))
+            try image.write([0xE5], at: at)
+        }
+        do {
+            let slot = try addEntries(entries.long + [short], to: entry.parent)
+            image.flush()
+            return try entryAt(slot: slot, in: entry.parent)
+        } catch {
+            for (slot, bytes) in saved { try? image.write(bytes, at: try slotOffset(slot, in: entry.parent)) }
+            image.flush()
+            throw error
+        }
     }
 
     /// Names in use in a directory, uppercase: both long and 8.3 names.
@@ -733,12 +745,10 @@ public enum FATNames {
             if hasLower && hasUpper { return nil }
             if hasLower { flags |= i == 0 ? 0x08 : 0x10 }
         }
-        let upper = name.uppercased()
         let base = Array(String(parts[0]).uppercased().utf8)
         let ext = parts.count > 1 ? Array(String(parts[1]).uppercased().utf8) : []
         var raw = base + [UInt8](repeating: 0x20, count: 8 - base.count) + ext + [UInt8](repeating: 0x20, count: 3 - ext.count)
         if raw[0] == 0xE5 { raw[0] = 0x05 }
-        _ = upper
         return (raw, flags)
     }
 

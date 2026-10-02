@@ -130,6 +130,10 @@ final class FATTests: XCTestCase {
         }) { error in
             guard case MediaError.directoryFull = error else { return XCTFail("\(error)") }
         }
+        // A rename that needs more slots than are free keeps the old name.
+        let f0 = try XCTUnwrap(try volume.list(.root).first { $0.name == "F0.TXT" })
+        XCTAssertThrowsError(try volume.rename(f0, to: "A much longer name than before.txt"))
+        XCTAssertTrue(try volume.list(.root).contains { $0.name == "F0.TXT" })
     }
 
     func testFullDiskWritesNothing() throws {
