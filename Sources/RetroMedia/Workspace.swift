@@ -37,7 +37,7 @@ final class OpenMedium: ObservableObject, Identifiable {
     var symbol: String {
         if medium is ISOMedium { return "opticaldisc" }
         if medium is AkaiMedium { return "pianokeys" }
-        return medium.totalBytes <= 3 * 1_048_576 ? "opticaldiscdrive" : "internaldrive"
+        return medium.totalBytes <= 3 * 1_048_576 ? "externaldrive" : "internaldrive"
     }
     var currentFolder: FolderRef { path.last?.folder ?? .root }
     var displayPath: String { "/" + path.map { $0.name + "/" }.joined() }

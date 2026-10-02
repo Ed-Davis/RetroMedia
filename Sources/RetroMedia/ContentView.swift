@@ -138,7 +138,7 @@ struct Sidebar: View {
         if ext == "iso" { return "opticaldisc" }
         if ["hda", "hds", "hdf"].contains(ext) { return "internaldrive" }
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        return size > 3 * 1_048_576 ? "internaldrive" : "opticaldiscdrive"
+        return size > 3 * 1_048_576 ? "internaldrive" : "externaldrive"
     }
 }
 
