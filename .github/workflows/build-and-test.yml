@@ -13,7 +13,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0   # build number comes from the commit count
 
@@ -43,7 +43,7 @@ jobs:
       run: ./make-dmg.sh
 
     - name: Upload test DMG
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: RetroMedia-test-dmg
         path: 'build/*.dmg'
